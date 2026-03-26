@@ -1,12 +1,13 @@
 package com.asm.gestion_stagiaires.Controller;
 
 import com.asm.gestion_stagiaires.models.Candidature;
-import com.asm.gestion_stagiaires.models.StatusCandidature;
-import com.asm.gestion_stagiaires.repositories.CandidatureRepository;
+import com.asm.gestion_stagiaires.models.Utilisateur;
 import com.asm.gestion_stagiaires.services.CandidatureService;
 import com.asm.gestion_stagiaires.services.FileStorageService;
+import com.asm.gestion_stagiaires.services.StagiaireService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -20,58 +21,75 @@ import java.util.Map;
 @CrossOrigin("*")
 public class CandidatureController {
 
-    @Autowired private CandidatureService    candidatureService;
-    @Autowired private FileStorageService    fileStorageService;
-    @Autowired private CandidatureRepository candidatureRepository;
+    @Autowired private CandidatureService candidatureService;
+    @Autowired private FileStorageService fileStorageService;
+    @Autowired private StagiaireService stagiaireService;
 
     @PostMapping("/postuler")
+    @PreAuthorize("hasAuthority('ROLE_STAGIAIRE')")
     public ResponseEntity<Candidature> postuler(
-            @RequestParam("File")    MultipartFile file,
+            @RequestParam("File") MultipartFile file,
             @RequestParam("sujetId") Long sujetId,
             Principal principal) {
+
         String fileName = fileStorageService.save(file);
         Candidature candidature = new Candidature();
         candidature.setCvPath(fileName);
+
         return ResponseEntity.ok(
-                candidatureService.saveCandidature(candidature, sujetId, principal.getName()));
+                candidatureService.saveCandidature(candidature, sujetId, principal.getName())
+        );
     }
 
     @GetMapping
-    public List<Candidature> voirCandidatures(@RequestParam(required = false) Long stagiaireId) {
-        if (stagiaireId != null) return candidatureService.getCandidaturesByStagiaire(stagiaireId);
-        return candidatureService.getAllCandidatures();
+    @PreAuthorize("hasAuthority('ROLE_RH') or hasAuthority('ROLE_STAGIAIRE')")
+    public List<Candidature> voirCandidatures(
+            @RequestParam(required = false) Long stagiaireId,
+            Principal principal) {
+
+        if (stagiaireId != null) {
+            return candidatureService.getCandidaturesByStagiaire(stagiaireId);
+        }
+
+        return candidatureService.getAllCandidaturesByRh(principal.getName());
     }
 
     @PutMapping("/{id}/accepter")
+    @PreAuthorize("hasAuthority('ROLE_RH')")
     public ResponseEntity<Candidature> accepter(@PathVariable Long id) {
-        return candidatureRepository.findById(id).map(c -> {
-            c.setStatut(StatusCandidature.ACCEPTE);
-            return ResponseEntity.ok(candidatureRepository.save(c));
-        }).orElse(ResponseEntity.notFound().build());
+        Candidature candidature = candidatureService.accepterCandidature(id);
+        stagiaireService.creerStagiaire(candidature.getStagiaire(), candidature);
+        return ResponseEntity.ok(candidature);
     }
 
     @PutMapping("/{id}/refuser")
+    @PreAuthorize("hasAuthority('ROLE_RH')")
     public ResponseEntity<Candidature> refuser(@PathVariable Long id) {
-        return candidatureRepository.findById(id).map(c -> {
-            c.setStatut(StatusCandidature.REFUSEE);
-            return ResponseEntity.ok(candidatureRepository.save(c));
-        }).orElse(ResponseEntity.notFound().build());
+        return ResponseEntity.ok(candidatureService.refuserCandidature(id));
     }
 
     @PutMapping("/{id}/entretien")
+    @PreAuthorize("hasAuthority('ROLE_RH')")
     public ResponseEntity<Candidature> planifierEntretien(
             @PathVariable Long id,
             @RequestBody Map<String, String> body) {
-        return candidatureRepository.findById(id).map(c -> {
-            c.setDateEntretien(LocalDateTime.parse(body.get("dateEntretien")));
-            return ResponseEntity.ok(candidatureRepository.save(c));
-        }).orElse(ResponseEntity.notFound().build());
+
+        LocalDateTime dateEntretien = LocalDateTime.parse(body.get("dateEntretien"));
+        return ResponseEntity.ok(candidatureService.planifierEntretien(id, dateEntretien));
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAuthority('ROLE_RH')")
     public ResponseEntity<Void> supprimer(@PathVariable Long id) {
-        if (!candidatureRepository.existsById(id)) return ResponseEntity.notFound().build();
-        candidatureRepository.deleteById(id);
+        candidatureService.supprimerCandidature(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/has-accepted")
+    @PreAuthorize("hasAuthority('ROLE_STAGIAIRE')")
+    public ResponseEntity<Boolean> hasAcceptedCandidature(Principal principal) {
+        Utilisateur utilisateur = candidatureService.getUtilisateurByEmail(principal.getName());
+        boolean hasAccepted = candidatureService.hasAcceptedCandidature(utilisateur.getId());
+        return ResponseEntity.ok(hasAccepted);
     }
 }
